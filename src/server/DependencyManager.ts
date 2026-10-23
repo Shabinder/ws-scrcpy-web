@@ -539,6 +539,21 @@ export class DependencyManager {
         } catch (err) {
             log.warn(`seed-promote scrcpy-server failed: ${(err as Error).message}`);
         }
+        // arm64-linux: Google ships no arm64 platform-tools, so promote the vendored OS
+        // adb seed (Debian `adb`) before any download. No-op on x86-64 / when unseeded.
+        let adbPromoted = false;
+        try {
+            adbPromoted = this.promoteSeedAdb();
+        } catch (err) {
+            log.warn(`seed-promote adb failed: ${(err as Error).message}`);
+        }
+        if (adbPromoted) {
+            await this.checkInstalled('adb');
+            const adb = this.state.get('adb');
+            if (adb && adb.installedVersion !== null) {
+                adb.errorMessage = undefined;
+            }
+        }
         // Re-read what is installed once the seed has landed. checkAll() ran
         // before the promote and recorded scrcpy-server as not installed, so
         // the loop below downloaded the same version over the copy just made
@@ -821,6 +836,39 @@ export class DependencyManager {
     /** `<image>/seed/scrcpy-server/scrcpy-server`; `__dirname` is always `<image>/dist/`. */
     public static seedScrcpyServerPath(): string {
         return path.join(__dirname, '..', 'seed', 'scrcpy-server', 'scrcpy-server');
+    }
+
+    /** `<image>/seed/adb/adb`; staged only on arm64-linux (see scripts/stage-seed-adb.mjs). */
+    public static seedAdbPath(): string {
+        return path.join(__dirname, '..', 'seed', 'adb', 'adb');
+    }
+
+    /**
+     * arm64-linux: promote the vendored OS adb seed into <deps>/adb/adb.
+     *
+     * Google's platform-tools is x86-64 Linux only (one `platform-tools_r<ver>-linux.zip`
+     * built for x86-64), so on arm64 the normal download installs a binary that cannot
+     * exec. We instead ship a distro-provided arm64 adb (Debian's `adb` package, baked by
+     * the Dockerfile arm64 stage) as a seed and promote it here — mirroring the
+     * scrcpy-server seed path. No-op on x86-64 and when no seed is present, so that path
+     * falls through to the unchanged Google download.
+     *
+     * @returns true when this call copied the seed in.
+     */
+    private promoteSeedAdb(): boolean {
+        const destFile = path.join(this.depsPath, 'adb', 'adb');
+        if (fs.existsSync(destFile)) {
+            return false; // already promoted or installed
+        }
+        const seedFile = DependencyManager.seedAdbPath();
+        if (!fs.existsSync(seedFile)) {
+            return false; // no seed (not arm64-linux, or x86-64) — fall through to the Google download
+        }
+        fs.mkdirSync(path.dirname(destFile), { recursive: true });
+        fs.copyFileSync(seedFile, destFile);
+        fs.chmodSync(destFile, 0o755);
+        log.info(`promoted seed adb → ${destFile}`);
+        return true;
     }
 
     public requestRestart(): void {

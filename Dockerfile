@@ -60,9 +60,25 @@ COPY . .
 # webpack, TypeScript 7's native compiler, swc, biome: 372 MB), which is how a
 # Go-stdlib CVE inside `@typescript/typescript-linux-x64/lib/tsc` reached the
 # Docker Scout gate.
+# arm64 adb: Google ships no arm64 platform-tools, so on an arm64 build leg we vendor
+# Debian's own `adb` (a maintained, distro-packaged AOSP build — the base is Debian) and
+# seed it; stage-seed-adb.mjs is a no-op on x86-64, where the Google download is unchanged.
+# TARGETARCH is set by BuildKit (arm64 | amd64).
+ARG TARGETARCH
+RUN set -eux; \
+    if [ "${TARGETARCH}" = "arm64" ]; then \
+        apt-get update; \
+        apt-get install -y --no-install-recommends adb; \
+        mkdir -p vendor/adb/linux-arm64; \
+        cp "$(readlink -f "$(command -v adb)")" vendor/adb/linux-arm64/adb; \
+        chmod 0755 vendor/adb/linux-arm64/adb; \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
 RUN node scripts/fetch-prebuilts.mjs \
  && node scripts/stage-seed-node-pty.mjs \
  && node scripts/stage-seed-scrcpy-server.mjs \
+ && node scripts/stage-seed-adb.mjs \
  && npm run build \
  && node scripts/fetch-tini.mjs /out/tini
 
@@ -136,6 +152,19 @@ RUN npm ci --omit=dev --ignore-scripts \
 
 COPY --from=build /src/dist            ./dist
 COPY --from=build /src/seed            ./seed
+
+# arm64: the seeded adb (seed/adb/adb) is Debian's dynamically-linked AOSP build, so the
+# runtime needs its shared libs (libusb-1.0, libbrotli, libpcre2, …). Installing the `adb`
+# package here pulls exactly those and nothing device-facing changes on x86-64 (the guard
+# skips it). One RUN, lists cleaned, so no apt cache ships.
+ARG TARGETARCH
+RUN set -eux; \
+    if [ "${TARGETARCH}" = "arm64" ]; then \
+        apt-get update; \
+        apt-get install -y --no-install-recommends adb; \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
 COPY start.sh                          ./start.sh
 COPY docker/entrypoint.sh              /usr/local/bin/entrypoint.sh
 

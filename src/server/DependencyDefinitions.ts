@@ -331,6 +331,13 @@ export function getDependencyDefinitions(
                 return runVersionCommand(exe, ['--version'], /Version ([\d.]+)/);
             },
             checkLatest: async () => {
+                // arm64-linux has no Google platform-tools build, so there is no "latest"
+                // to update to — adb is provided by the vendored OS seed (promoteSeedAdb).
+                // Returning null here means autoInstallMissing never tries to download the
+                // x86-64 zip over the seeded arm64 binary. x86-64 is unchanged.
+                if (platform === 'linux' && arch === 'arm64') {
+                    return null;
+                }
                 const res = await fetchOkWithRetry(ADB_REPOSITORY_XML_URL, {
                     ...VERSION_CHECK_POLICY,
                     onRetry: (n) => log.warn(`adb latest check ${n.attempt}/${n.attempts}: ${n.reason}`),
